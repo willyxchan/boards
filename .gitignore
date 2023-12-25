@@ -1,0 +1,6 @@
+ # Ignore Node modules
+/server/node_modules
+
+# Ignore the entire database folder
+/server/database/
+

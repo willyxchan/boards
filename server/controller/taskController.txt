@@ -1,0 +1,180 @@
+// controllers/taskController.js
+const { Users, BoardMembers , Tasks } = require('../database/models');
+const { Op } = require('sequelize');
+
+/* ---------------------  Fungsi untuk memeriksa apakah pengguna adalah anggota board  ------------------------ */
+const isBoardMember = async (userId, boardId) => {
+  try {
+    const boardMember = await BoardMembers.findOne({
+      where: { UserId: userId, BoardId: boardId },
+    });
+
+    return !!boardMember; // Mengembalikan nilai true jika pengguna adalah anggota board, dan false jika tidak.
+  } catch (error) {
+    console.error(error);
+    return false;
+  }
+};
+/* ---------------------  Fungsi untuk memeriksa apakah pengguna adalah anggota board  ------------------------ */
+
+/* ----------------------------------  Fungsi untuk membuat new Task  ----------------------------------------- */
+const createTask = async (userId, boardId, title, description, status, created_at , updated_at, due_date) => {
+  try {
+    // Periksa apakah pengguna adalah anggota board
+    const isMember = await isBoardMember(userId, boardId);
+
+    if (!isMember) {
+      return { success: false, message: "Anda tidak memiliki izin untuk membuat tugas di board ini" };
+    }
+
+        // Periksa apakah judul tugas sudah ada di dalam board
+        const existingTasks = await Tasks.findAll({
+          where: { BoardId: boardId, title: title },
+          attributes: ['TaskId', 'UserAssignId', 'BoardId', 'title', 'description', 'status', 'due_date', 'created_at', 'updated_at'],
+        });
+    
+        let newTitle = title;
+    
+        if (existingTasks.length > 0) {
+          // Jika sudah ada, cari versi terbaru dan tambahkan 1
+          const latestVersion = existingTasks.reduce((maxVersion, task) => {
+            const match = task.title.match(/\(by user (\d+)\) versi (\d+)/);
+            const taskUserId = match ? parseInt(match[1], 10) : 0;
+    
+            if (taskUserId === userId) {
+              return Math.max(maxVersion, match ? parseInt(match[2], 10) : 0);
+            }
+    
+            return maxVersion;
+          }, 0);
+    
+          const version = latestVersion + 1;
+          newTitle = `${title} (by user ${userId}) versi ${version}`;
+        }
+    
+    // Ambil userAssignId sesuai dengan userId pengguna yang membuat task
+    const userAssign = await Users.findOne({
+      where: { UserId: userId },
+      attributes: ['UserId'],
+    });
+
+    // Gunakan waktu saat ini sebagai due date
+    const currentDate = new Date();
+    created_at = created_at || currentDate;
+    updated_at = updated_at || currentDate;
+    
+    // Gunakan waktu saat ini sebagai due_date jika tidak ada yang diberikan
+    const dueDate = due_date || new Date(currentDate.getTime() + 7 * 24 * 60 * 60 * 1000); 
+    // Tambahkan 7 hari (dalam milidetik) ke waktu saat ini
+
+    // Buat tugas baru dengan menetapkan userAssignId, status, dan due date
+    const createdTask = await Tasks.create({
+      BoardId: boardId,
+      UserId: userId,
+      UserAssignId: userAssign.UserId, // Set userAssignId berdasarkan UserId pengguna
+      title: newTitle,
+      description: description,
+      status: status || 'to do', // Gunakan status yang diberikan atau set ke 'To Do' jika tidak ada
+      created_at: created_at,
+      updated_at: updated_at,
+      due_date: dueDate,
+    });
+
+    return { success: true, message: "Tugas berhasil dibuat", newTitle: newTitle, taskId: createdTask.TaskId };
+  } catch (error) {
+    console.error(error);
+    return { success: false, message: "Terjadi kesalahan saat membuat tugas" };
+  }
+};
+/* ----------------------------------  Fungsi untuk membuat new Task  ----------------------------------------- */
+
+
+/* --------------------------------  Fungsi untuk membuat Update Task  ----------------------------------------- */
+/* --------  berlaku selama merupakan 1 BoardMember atau user lain diadd oleh admin suatu board  --------------- */
+const updateTask = async (userId, taskId, title, description, status, due_date) => {
+    try {
+      // Periksa apakah pengguna adalah anggota board
+      const isMember = await isBoardMember(userId, taskId);
+  
+      if (!isMember) {
+        return { success: false, message: "Anda tidak memiliki izin untuk memperbarui tugas ini" };
+      }
+  
+      // // Periksa apakah judul tugas sudah ada di dalam board, kecuali untuk tugas yang sedang diperbarui
+      // const existingTasks = await Tasks.findAll({
+      //   where: { BoardId: boardId, title: title, TaskId: { [Op.not]: taskId } },
+      // });
+  
+      // let newTitle = title;
+  
+      // if (existingTasks.length > 0) {
+      //   // Jika sudah ada, cari versi terbaru dan tambahkan 1
+      //   const latestVersion = existingTasks.reduce((maxVersion, task) => {
+      //     const match = task.title.match(/\(by user \d+\) versi (\d+)/);
+      //     const taskVersion = match ? parseInt(match[1], 10) : 0;
+      //     return taskVersion > maxVersion ? taskVersion : maxVersion;
+      //   }, 0);
+  
+      //   const version = latestVersion + 1;
+      //   newTitle = `${title} (by user ${userId}) versi ${version}`;
+      // }
+      
+       // Periksa apakah judul tugas sudah ada di dalam board, kecuali untuk tugas yang sedang diperbarui
+      const existingTasks = await Tasks.findAll({
+        where: { BoardId: boardId, title: title },
+        order: [['created_at', 'DESC']], // Urutkan berdasarkan created_at secara descending
+      });
+
+      let newTitle = title;
+
+      if (existingTasks.length > 0) {
+        // Jika sudah ada, cari versi terbaru dan tambahkan 1
+        const latestVersion = existingTasks[0].title.match(/\(by user \d+\) versi (\d+)/);
+        const version = latestVersion ? parseInt(latestVersion[1], 10) + 1 : 1;
+
+        newTitle = `${title} (by user ${userId}) versi ${version}`;
+      }
+
+      // Gunakan waktu saat ini sebagai created_at dan updated_at jika tidak ada yang diberikan
+        const currentDate = new Date();
+        const created_at = created_at || currentDate;
+        const updated_at = updated_at || currentDate;
+      
+      // Gunakan waktu saat ini sebagai due_date jika tidak ada yang diberikan
+        const dueDate = due_date || new Date(currentDate.getTime() + 7 * 24 * 60 * 60 * 1000); 
+        // Tambahkan 7 hari (dalam milidetik) ke waktu saat ini
+
+      // Perbarui tugas dengan menetapkan title, description, status, dan due date baru
+      const [updatedRowCount] = await Tasks.update(
+        {
+          title: newTitle,
+          description: description,
+          status: status || 'to do',
+          created_at: created_at || currentDate,
+          updated_at: updated_at || currentDate,
+          due_date: dueDate,
+        },
+        {
+          where: { TaskId: taskId },
+        }
+      );
+  
+      if (updatedRowCount > 0) {
+        return { success: true, message: "Tugas berhasil diperbarui", newTitle: newTitle, taskId: taskId };
+      } else {
+        return { success: false, message: "Tugas tidak ditemukan atau tidak dapat diperbarui" };
+      }
+    } catch (error) {
+      console.error(error);
+      return { success: false, message: "Terjadi kesalahan saat memperbarui tugas" };
+    }
+  };
+/* --------------------------------  Fungsi untuk membuat Update Task  ----------------------------------------- */
+
+
+module.exports = {
+    isBoardMember,
+    // Fungsi-fungsi lain di taskController...
+    createTask,
+    updateTask,
+  };
